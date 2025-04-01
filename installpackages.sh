@@ -28,7 +28,7 @@ install_tools() {
     sudo snap install metasploit-framework -y 
     
     echo "[*] Installing John the Ripper..."
-    sudo apt install john -y
+    sudo apt install john
 }
 
 # Main function to run the setup
