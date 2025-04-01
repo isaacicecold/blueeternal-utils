@@ -1,43 +1,59 @@
-#!/bin/bash
+log_error() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - ERROR - [*] $1"
+}
 
-# Function to check for internet connectivity
+log_info() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - INFO - [*] $1"
+}
+
 check_internet() {
-    echo "[*] Checking internet connectivity..."
+    log_info "Checking internet connectivity..."
     if ! ping -c 1 google.com &> /dev/null; then
-        echo "[!] No internet connection. Please check your network settings."
+        log_error "No internet connection. Please check your network settings."
         exit 1
     fi
-    echo "[*] Internet connectivity verified."
+    log_info "Internet connectivity verified."
 }
 
 # Function to check if snap is installed
 check_snap_installed() {
     if ! command -v snap &> /dev/null; then
-        echo "[*] Snap not found. Installing Snap..."
-        sudo apt-get update
-        sudo apt install -y snapd
-        sudo systemctl enable --now snapd.socket
+        log_info "Snap not found. Installing Snap..."
+        sudo apt-get update > /dev/null 2>&1
+        sudo apt install snapd -y > /dev/null 2>&1
+        sudo systemctl enable --now snapd.socket > /dev/null 2>&1
+        log_info "Snap installed."
     else
-        echo "[*] Snap is already installed."
+        log_info "Snap is already installed."
     fi
 }
 
-# Install Metasploit Framework and John the Ripper via snap and apt
+# Install Metasploit Framework and John the Ripper via snap
 install_tools() {
-    echo "[*] Installing Metasploit Framework..."
-    sudo snap install metasploit-framework -y 
-    
-    echo "[*] Installing John the Ripper..."
-    sudo apt install john
+    log_info "Installing Metasploit Framework..."
+    if ! snap list metasploit-framework > /dev/null 2>&1; then
+        sudo snap install metasploit-framework > /dev/null 2>&1
+        log_info "Metasploit Framework installed."
+    else
+        log_info "Metasploit Framework is already installed."
+    fi
+
+    log_info "Installing John the Ripper..."
+    if ! snap list john-the-ripper > /dev/null 2>&1; then
+        sudo snap install john-the-ripper > /dev/null 2>&1
+        log_info "John the Ripper installed."
+    else
+        log_info "John the Ripper is already installed."
+    fi
 }
 
 # Main function to run the setup
 main() {
     check_internet  # Check internet connection before proceeding
-    sudo apt-get update  # Update package list for apt
+    sudo apt-get update > /dev/null 2>&1  # Update package list silently
     check_snap_installed  # Check and install snap if necessary
     install_tools  # Install Metasploit Framework and John the Ripper
-    echo "[*] Installation complete. Both Metasploit and John the Ripper are installed."
+    log_info "Installation complete. Both Metasploit and John the Ripper are installed."
 }
 
 # Run the main function
